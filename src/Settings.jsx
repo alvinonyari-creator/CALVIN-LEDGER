@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Trash2, Plus, Pencil } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { iconFor, ICON_KEYS, PALETTE, fmt, fmtDT, termProblems } from "./lib";
-import { SectionLabel, input, smallGhost, smallPrimary, iconBtn } from "./ui";
+import { SectionLabel, Banner, input, smallGhost, smallPrimary, iconBtn } from "./ui";
 
 export function Settings({ householdId, household, categories, templates, people, terms, audit, reload, log }) {
   const [tab, setTab] = useState("categories");
@@ -37,6 +37,10 @@ export function Settings({ householdId, household, categories, templates, people
 function CategoryManager({ householdId, categories, reload, log }) {
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
+  // Every save/delete below now surfaces its error instead of failing
+  // silently. A failed request with no visible message looks identical to
+  // "the app won't let me" - which is exactly what was reported.
+  const [error, setError] = useState(null);
   const blank = { name: "", icon_key: "more", color: PALETTE[0], budget_amount: "", budget_period: "", budget_rollover: true, exclude_from_total: false };
   const [draft, setDraft] = useState(blank);
 
@@ -53,13 +57,23 @@ function CategoryManager({ householdId, categories, reload, log }) {
       budget_rollover: draft.budget_rollover,
       exclude_from_total: draft.exclude_from_total,
     };
-    const { error } = editing
+    const { error: err } = editing
       ? await supabase.from("categories").update(payload).eq("id", editing)
       : await supabase.from("categories").insert(payload);
-    if (!error) {
-      log(editing ? "edited" : "created", "category", `${payload.name}${payload.budget_amount ? ` — budget ${fmt(payload.budget_amount)}/${payload.budget_period}` : ""}`);
-      setEditing(null); setAdding(false); setDraft(blank); reload();
+    if (err) {
+      // The most common real cause: a category with this name already exists
+      // in this household (names must be unique per household). Say so
+      // plainly rather than showing Postgres's raw constraint wording.
+      setError(
+        /duplicate key|unique constraint/i.test(err.message)
+          ? `A category named "${payload.name}" already exists.`
+          : `Couldn't save: ${err.message}`
+      );
+      return;
     }
+    setError(null);
+    log(editing ? "edited" : "created", "category", `${payload.name}${payload.budget_amount ? ` — budget ${fmt(payload.budget_amount)}/${payload.budget_period}` : ""}`);
+    setEditing(null); setAdding(false); setDraft(blank); reload();
   }
 
   // Categories with spending history are archived, never deleted. Deleting them
@@ -80,18 +94,21 @@ function CategoryManager({ householdId, categories, reload, log }) {
         `but kept so past reports still add up correctly.`
       );
       if (!ok) return;
-      const { error } = await supabase.from("categories").update({ archived: true }).eq("id", c.id);
-      if (!error) { log("archived", "category", `${c.name} (${count} entries kept)`); reload(); }
+      const { error: err } = await supabase.from("categories").update({ archived: true }).eq("id", c.id);
+      if (err) return setError(`Couldn't archive: ${err.message}`);
+      setError(null); log("archived", "category", `${c.name} (${count} entries kept)`); reload();
       return;
     }
 
-    const { error } = await supabase.from("categories").delete().eq("id", c.id);
-    if (!error) { log("deleted", "category", c.name); reload(); }
+    const { error: err } = await supabase.from("categories").delete().eq("id", c.id);
+    if (err) return setError(`Couldn't delete: ${err.message}`);
+    setError(null); log("deleted", "category", c.name); reload();
   }
 
   async function restore(c) {
-    const { error } = await supabase.from("categories").update({ archived: false }).eq("id", c.id);
-    if (!error) { log("restored", "category", c.name); reload(); }
+    const { error: err } = await supabase.from("categories").update({ archived: false }).eq("id", c.id);
+    if (err) return setError(`Couldn't restore: ${err.message}`);
+    setError(null); log("restored", "category", c.name); reload();
   }
 
   const Form = (
@@ -164,6 +181,7 @@ function CategoryManager({ householdId, categories, reload, log }) {
   return (
     <div>
       <SectionLabel>Expenses & budgets</SectionLabel>
+      {error && <Banner>{error}</Banner>}
       {categories.filter((c) => !c.archived).map((c) => {
         const I = iconFor(c.icon_key);
         return editing === c.id ? <div key={c.id}>{Form}</div> : (
@@ -219,26 +237,30 @@ function TemplateManager({ householdId, categories, templates, people, reload, l
   const [adding, setAdding] = useState(false);
   const blank = { label: "", category: categories[0]?.name || "", amount: "", recipient: "", due_day: "" };
   const [draft, setDraft] = useState(blank);
+  const [error, setError] = useState(null);
 
   async function save(e) {
     e.preventDefault();
     const amt = Number(draft.amount);
     if (!draft.label.trim() || !amt) return;
-    const { error } = await supabase.from("templates").insert({
+    const { error: err } = await supabase.from("templates").insert({
       household_id: householdId, label: draft.label.trim(), category: draft.category,
       amount: amt, recipient: draft.recipient,
       due_day: draft.due_day === "" ? null : Number(draft.due_day),
     });
-    if (!error) { log("created", "template", draft.label.trim()); setDraft(blank); setAdding(false); reload(); }
+    if (err) return setError(`Couldn't save: ${err.message}`);
+    setError(null); log("created", "template", draft.label.trim()); setDraft(blank); setAdding(false); reload();
   }
   async function remove(t) {
-    const { error } = await supabase.from("templates").delete().eq("id", t.id);
-    if (!error) { log("deleted", "template", t.label); reload(); }
+    const { error: err } = await supabase.from("templates").delete().eq("id", t.id);
+    if (err) return setError(`Couldn't delete: ${err.message}`);
+    setError(null); log("deleted", "template", t.label); reload();
   }
 
   return (
     <div>
       <SectionLabel>Quick entries</SectionLabel>
+      {error && <Banner>{error}</Banner>}
       <div style={{ fontSize: 12, color: "var(--ls-textFaint)", marginBottom: 10 }}>
         Saved amounts you pay regularly. They appear as one-tap buttons on the logging screen.
       </div>
@@ -289,15 +311,18 @@ function TemplateManager({ householdId, categories, templates, people, reload, l
 
 function PeopleManager({ householdId, household, people, reload }) {
   const [name, setName] = useState("");
+  const [error, setError] = useState(null);
   async function add(e) {
     e.preventDefault();
     if (!name.trim()) return;
-    const { error } = await supabase.from("people").insert({ household_id: householdId, name: name.trim() });
-    if (!error) { setName(""); reload(); }
+    const { error: err } = await supabase.from("people").insert({ household_id: householdId, name: name.trim() });
+    if (err) return setError(`Couldn't add: ${err.message}`);
+    setError(null); setName(""); reload();
   }
   return (
     <div>
       <SectionLabel>People</SectionLabel>
+      {error && <Banner>{error}</Banner>}
       {people.map((p) => (
         <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #1F2E4E" }}>
           <span style={{ fontSize: 14 }}>{p.name}</span>
@@ -332,16 +357,18 @@ const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 
 function TermManager({ householdId, terms, reload }) {
   const [draft, setDraft] = useState(null); // {id?, name, months}
+  const [error, setError] = useState(null);
   const problems = termProblems(terms);
 
   async function save(e) {
     e.preventDefault();
     if (!draft.name.trim() || !draft.months.length) return;
     const payload = { household_id: householdId, name: draft.name.trim(), months: draft.months, sort_order: draft.sort_order ?? 100 };
-    const { error } = draft.id
+    const { error: err } = draft.id
       ? await supabase.from("terms").update(payload).eq("id", draft.id)
       : await supabase.from("terms").insert(payload);
-    if (!error) { setDraft(null); reload(); }
+    if (err) return setError(`Couldn't save: ${err.message}`);
+    setError(null); setDraft(null); reload();
   }
 
   const toggle = (m) => setDraft((d) => ({
@@ -351,6 +378,7 @@ function TermManager({ householdId, terms, reload }) {
   return (
     <div>
       <SectionLabel>Payment periods</SectionLabel>
+      {error && <Banner>{error}</Banner>}
       <div style={{ fontSize: 12, color: "var(--ls-textFaint)", marginBottom: 12, lineHeight: 1.5 }}>
         Only needed if you set a "per term" budget on an expense. Define however many
         periods your school uses — two semesters, three terms, four quarters. Leave
