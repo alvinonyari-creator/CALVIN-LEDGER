@@ -260,7 +260,7 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
 
       <div style={{ marginTop: 28, paddingTop: 18, borderTop: "1px solid #1F2E4E", textAlign: "center" }}>
         <div style={{ fontSize: 11, color: "var(--ls-textFaintest)", letterSpacing: "0.04em" }}>
-          Akiba is a product owned by Alcorp Holdings Ltd.
+          Ledger Sawa is a product owned by Alcorp Holdings Ltd.
         </div>
       </div>
     </Shell>
