@@ -7,6 +7,7 @@ export function AuthScreen() {
   const [mode, setMode] = useState("signin"); // signin | signup | reset
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [msg, setMsg] = useState(null);
   const [tone, setTone] = useState("error");
   const [busy, setBusy] = useState(false);
@@ -23,17 +24,40 @@ export function AuthScreen() {
         setTone("info");
         setMsg("If that email has an account, a reset link is on its way. Open it on this device.");
       } else if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({ email: email.trim(), password });
+        // Checked here rather than only relying on the browser, since a typo
+        // in a password nobody can see is otherwise invisible until the next
+        // sign-in fails.
+        if (password !== confirmPassword) {
+          setTone("error");
+          setMsg("Those passwords don't match.");
+          setBusy(false);
+          return;
+        }
+        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
         if (error) throw error;
         setTone("info");
-        setMsg("Account created. If email confirmation is enabled, confirm first, then sign in.");
+        // Supabase returns no session when confirmation is required, and a
+        // real session when it isn't - branching on that tells the truth
+        // about what just happened instead of hedging with "if enabled".
+        if (data.session) {
+          setMsg("Account created and signed in.");
+        } else {
+          setMsg("Account created. Check your email for a confirmation link before signing in.");
+          setMode("signin");
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (error) throw error;
       }
     } catch (err) {
       setTone("error");
-      setMsg(err.message);
+      // Supabase's own wording for this case ("Email not confirmed") is
+      // already reasonably clear, but the fix isn't obvious from that alone.
+      setMsg(
+        err.message === "Email not confirmed"
+          ? "Confirm your email first - check your inbox for the link, including spam."
+          : err.message
+      );
     }
     setBusy(false);
   }
@@ -50,13 +74,17 @@ export function AuthScreen() {
           <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={input} required minLength={6}
             autoComplete={mode === "signin" ? "current-password" : "new-password"} />
         )}
+        {mode === "signup" && (
+          <input type="password" placeholder="Confirm password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} style={input} required minLength={6}
+            autoComplete="new-password" />
+        )}
         <button type="submit" disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }}>
           {busy ? "Working…" : mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link"}
         </button>
       </form>
       {msg && <div style={{ marginTop: 12 }}><Banner tone={tone}>{msg}</Banner></div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
-        <button onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMsg(null); }} style={ghostBtn}>
+        <button onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMsg(null); setConfirmPassword(""); }} style={ghostBtn}>
           {mode === "signin" ? "Need an account? Create one" : "Already have an account? Sign in"}
         </button>
         {mode !== "reset" && (
