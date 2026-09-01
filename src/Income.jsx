@@ -7,7 +7,7 @@ import { Card, SectionLabel, Banner, input, primaryBtn, ghostBtn, smallGhost, sm
 
 // Income is scope-aware in exactly the same way as expenses: a personal income
 // entry is invisible to household members, and vice versa.
-export function IncomeLedger({ session, scope, householdId, viewMonth, setViewMonth, readOnly }) {
+export function IncomeLedger({ session, scope, householdId, ownerId, viewMonth, setViewMonth, readOnly }) {
   const [categories, setCategories] = useState([]);
   const [entries, setEntries] = useState([]);
   // Fetched here rather than passed in. The expenses view is unmounted while
@@ -23,9 +23,12 @@ export function IncomeLedger({ session, scope, householdId, viewMonth, setViewMo
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ amount: "", category: "", source: "", note: "", reference: "", date: nowDT() });
 
-  const owner = { scope: "personal", user_id: session.user.id, household_id: null };
+  // ownerId lets an admin view a specific person's income instead of always
+  // the signed-in account's own. Defaults to self for every normal user.
+  const targetUserId = ownerId || session.user.id;
+  const owner = { scope: "personal", user_id: targetUserId, household_id: null };
 
-  useEffect(() => { setShowForm(false); setEditingId(null); setSearch(""); load(); }, [scope, householdId]);
+  useEffect(() => { setShowForm(false); setEditingId(null); setSearch(""); load(); }, [scope, householdId, ownerId]);
 
   const loadSeq = useRef(0);
 
@@ -33,10 +36,10 @@ export function IncomeLedger({ session, scope, householdId, viewMonth, setViewMo
     const seq = ++loadSeq.current;
     const [c, e, x] = await Promise.all([
       supabase.from("income_categories").select("*")
-        .eq("scope", "personal").eq("user_id", session.user.id).order("sort_order"),
+        .eq("scope", "personal").eq("user_id", targetUserId).order("sort_order"),
       supabase.from("income").select("*")
-        .eq("scope", "personal").eq("user_id", session.user.id).order("date", { ascending: false }),
-      supabase.from("personal_expenses").select("amount,date").eq("user_id", session.user.id),
+        .eq("scope", "personal").eq("user_id", targetUserId).order("date", { ascending: false }),
+      supabase.from("personal_expenses").select("amount,date").eq("user_id", targetUserId),
     ]);
     const missing = [c, e].filter((r) => r.error && /does not exist|schema cache/i.test(r.error.message || ""));
     if (missing.length) setError("Database setup incomplete - run supabase-schema-v12.sql.");

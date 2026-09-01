@@ -186,11 +186,17 @@ function Main({ session }) {
     // plus a shared tracker with someone else), so load all memberships.
     // If this account arrived from an invite link, join before loading, so the
     // household appears immediately rather than after a manual step.
+    // Admin accounts are read-only and must never hold real household
+    // membership - the database rejects this too, but skipping it client-side
+    // avoids a confusing "join failed" message for an admin who happens to
+    // open a household invite link.
     const code = readJoinCode();
-    if (code) {
+    if (code && !adminRow) {
       const { error: joinErr } = await supabase.rpc("join_household", { p_code: code });
       try { sessionStorage.removeItem("pending-join-code"); } catch { /* ignore */ }
       setPendingJoin(joinErr ? { failed: true, code, message: joinErr.message } : { joined: true, code });
+    } else if (code) {
+      try { sessionStorage.removeItem("pending-join-code"); } catch { /* ignore */ }
     }
 
     const { data: mems, error: memErr } = await supabase
@@ -349,33 +355,13 @@ function Main({ session }) {
   // a shared record of who-owes-what within a household created more friction
   // than it resolved. Debts are personal only now.
   if (mode === "debts" && !forceSetup) {
-    return (
-      <Shell>
-        <ModeSwitch mode={mode} setMode={setMode} />
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ls-accent)", marginBottom: 4 }}>Debts</div>
-          <h1 style={{ fontSize: 26, margin: 0, fontWeight: 500 }}>Mine</h1>
-        </div>
-        <DebtTracker
-          session={session}
-          scope="personal"
-          householdId={null}
-          categories={personalCats}
-          incomeCategories={incomeCats}
-          readOnly={false}
-        />
-        <SignOutBtn />
-      </Shell>
-    );
-  }
-
-  // Personal mode is independent of households - it works even for an account
-  // that belongs to none.
-  if (mode === "personal" && !forceSetup) {
-    const targetId = viewingUserId || session.user.id;
-    const targetLabel = viewingUserId
+    const debtTargetId = viewingUserId || session.user.id;
+    const debtTargetLabel = viewingUserId
       ? (allUsers.find((u) => u.user_id === viewingUserId)?.email || "user")
-      : session.user.email;
+      : "Mine";
+    // An admin account has no debts of its own to show or edit - it exists
+    // only to look at someone else's, one person at a time, read-only.
+    const adminNeedsSelection = isAdmin && !viewingUserId;
     return (
       <Shell>
         <ModeSwitch mode={mode} setMode={setMode} />
@@ -385,7 +371,57 @@ function Main({ session }) {
               <Shield size={12} /> Administrator
             </div>
             <select value={viewingUserId || ""} onChange={(e) => setViewingUserId(e.target.value || null)} style={{ ...input, fontSize: 13 }}>
-              <option value="">My own personal ledger</option>
+              <option value="">Choose a person's debts to view…</option>
+              {allUsers.filter((u) => u.user_id !== session.user.id).map((u) => (
+                <option key={u.user_id} value={u.user_id}>{u.email}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ls-accent)", marginBottom: 4 }}>Debts</div>
+          <h1 style={{ fontSize: 26, margin: 0, fontWeight: 500, wordBreak: "break-word" }}>{debtTargetLabel}</h1>
+          {isAdmin && viewingUserId && <div style={{ fontSize: 12, color: "var(--ls-warn)", marginTop: 6 }}>Read-only view</div>}
+        </div>
+        {adminNeedsSelection ? (
+          <div style={{ color: "var(--ls-textFaint)", fontSize: 14 }}>Choose a person above to view their debts.</div>
+        ) : (
+          <DebtTracker
+            session={session}
+            scope="personal"
+            householdId={null}
+            ownerId={debtTargetId}
+            categories={personalCats}
+            incomeCategories={incomeCats}
+            readOnly={isAdmin}
+          />
+        )}
+        <SignOutBtn />
+      </Shell>
+    );
+  }
+
+  // Personal mode is independent of households - it works even for an account
+  // that belongs to none. An admin account never has a personal ledger of its
+  // own to fall back to - it must always pick a real person to view, and that
+  // view is always read-only regardless of anything else.
+  if (mode === "personal" && !forceSetup) {
+    const targetId = viewingUserId || session.user.id;
+    const targetLabel = viewingUserId
+      ? (allUsers.find((u) => u.user_id === viewingUserId)?.email || "user")
+      : session.user.email;
+    const adminNeedsSelection = isAdmin && !viewingUserId;
+    const personalReadOnly = isAdmin || Boolean(viewingUserId);
+    return (
+      <Shell>
+        <ModeSwitch mode={mode} setMode={setMode} />
+        {isAdmin && (
+          <div style={{ marginBottom: 16, background: "var(--ls-adminBg)", border: "1px solid var(--ls-adminBorder)", borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--ls-adminText)", marginBottom: 8 }}>
+              <Shield size={12} /> Administrator
+            </div>
+            <select value={viewingUserId || ""} onChange={(e) => setViewingUserId(e.target.value || null)} style={{ ...input, fontSize: 13 }}>
+              <option value="">Choose a person to view…</option>
               {allUsers.filter((u) => u.user_id !== session.user.id).map((u) => (
                 <option key={u.user_id} value={u.user_id}>{u.email}</option>
               ))}
@@ -394,36 +430,43 @@ function Main({ session }) {
         )}
         <div style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ls-accent)", marginBottom: 4 }}>Personal</div>
-          <h1 style={{ fontSize: 26, margin: 0, fontWeight: 500, wordBreak: "break-word" }}>{targetLabel}</h1>
-          {viewingUserId && <div style={{ fontSize: 12, color: "var(--ls-warn)", marginTop: 6 }}>Read-only view</div>}
+          <h1 style={{ fontSize: 26, margin: 0, fontWeight: 500, wordBreak: "break-word" }}>{adminNeedsSelection ? "Personal" : targetLabel}</h1>
+          {personalReadOnly && !adminNeedsSelection && <div style={{ fontSize: 12, color: "var(--ls-warn)", marginTop: 6 }}>Read-only view</div>}
         </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-          {[["expenses", "Expenses"], ["income", "Income"]].map(([k, label]) => (
-            <button key={k} onClick={() => setLedgerView(k)} style={{
-              flex: 1, padding: "8px 0", fontSize: 13, fontWeight: 600, borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
-              background: ledgerView === k ? (k === "income" ? "var(--ls-income)" : "var(--ls-accent)") : "transparent",
-              color: ledgerView === k ? "var(--ls-bg)" : "var(--ls-textDim)", border: "1px solid var(--ls-border)",
-            }}>{label}</button>
-          ))}
-        </div>
-        {ledgerView === "expenses" ? (
-          <PersonalLedger
-            session={session}
-            ownerId={targetId}
-            ownerLabel={targetLabel}
-            readOnly={Boolean(viewingUserId)}
-            viewMonth={personalMonth}
-            setViewMonth={setPersonalMonth}
-          />
+        {adminNeedsSelection ? (
+          <div style={{ color: "var(--ls-textFaint)", fontSize: 14 }}>Choose a person above to view their personal ledger.</div>
         ) : (
-          <IncomeLedger
-            session={session}
-            scope="personal"
-            householdId={null}
-            viewMonth={personalMonth}
-            setViewMonth={setPersonalMonth}
-            readOnly={Boolean(viewingUserId)}
-          />
+          <>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+              {[["expenses", "Expenses"], ["income", "Income"]].map(([k, label]) => (
+                <button key={k} onClick={() => setLedgerView(k)} style={{
+                  flex: 1, padding: "8px 0", fontSize: 13, fontWeight: 600, borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                  background: ledgerView === k ? (k === "income" ? "var(--ls-income)" : "var(--ls-accent)") : "transparent",
+                  color: ledgerView === k ? "var(--ls-bg)" : "var(--ls-textDim)", border: "1px solid var(--ls-border)",
+                }}>{label}</button>
+              ))}
+            </div>
+            {ledgerView === "expenses" ? (
+              <PersonalLedger
+                session={session}
+                ownerId={targetId}
+                ownerLabel={targetLabel}
+                readOnly={personalReadOnly}
+                viewMonth={personalMonth}
+                setViewMonth={setPersonalMonth}
+              />
+            ) : (
+              <IncomeLedger
+                session={session}
+                scope="personal"
+                householdId={null}
+                ownerId={targetId}
+                viewMonth={personalMonth}
+                setViewMonth={setPersonalMonth}
+                readOnly={personalReadOnly}
+              />
+            )}
+          </>
         )}
         <SignOutBtn />
       </Shell>

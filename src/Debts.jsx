@@ -23,7 +23,7 @@ function dueLabel(dateStr) {
   return { text: `Due ${new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`, tone: "var(--ls-textFaint)", urgent: false };
 }
 
-export function DebtTracker({ session, scope, householdId, categories = [], incomeCategories = [], readOnly, onLedgerChanged }) {
+export function DebtTracker({ session, scope, householdId, ownerId, categories = [], incomeCategories = [], readOnly, onLedgerChanged }) {
   const [debts, setDebts] = useState([]);
   const [payments, setPayments] = useState({});
   const [loaded, setLoaded] = useState(false);
@@ -41,7 +41,11 @@ export function DebtTracker({ session, scope, householdId, categories = [], inco
   };
   const [draft, setDraft] = useState(blank);
 
-  useEffect(() => { setExpanded(null); setAdding(false); setEditing(null); load(); }, [scope, householdId]);
+  // ownerId lets an admin view a specific person's debts instead of always
+  // the signed-in account's own. Defaults to self for every normal user.
+  const owner = ownerId || session.user.id;
+
+  useEffect(() => { setExpanded(null); setAdding(false); setEditing(null); load(); }, [scope, householdId, ownerId]);
 
   const loadSeq = useRef(0);
 
@@ -49,7 +53,7 @@ export function DebtTracker({ session, scope, householdId, categories = [], inco
     const seq = ++loadSeq.current;
     let q = supabase.from("debts").select("*");
     q = scope === "personal"
-      ? q.eq("scope", "personal").eq("user_id", session.user.id)
+      ? q.eq("scope", "personal").eq("user_id", owner)
       : q.eq("scope", "household").eq("household_id", householdId);
     const { data, error: err } = await q.order("due_date", { ascending: true, nullsFirst: false });
     if (err) {
