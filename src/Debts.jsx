@@ -191,7 +191,8 @@ export function DebtTracker({ session, scope, householdId, ownerId, categories =
 
   async function setStatus(id, status) {
     const { error: err } = await supabase.from("debts").update({ status }).eq("id", id);
-    if (!err) load();
+    if (err) return setError(`Couldn't update: ${err.message}`);
+    setError(null); load();
   }
   async function removeDebt(d) {
     const linked = (payments[d.id] || []).filter((p) => p.household_expense_id || p.personal_expense_id || p.income_id);
@@ -205,7 +206,8 @@ export function DebtTracker({ session, scope, householdId, ownerId, categories =
       if (p.income_id) await supabase.from("income").delete().eq("id", p.income_id);
     }
     const { error: err } = await supabase.from("debts").delete().eq("id", d.id);
-    if (!err) { load(); if (linked.length && onLedgerChanged) onLedgerChanged(); }
+    if (err) return setError(`Couldn't delete: ${err.message}`);
+    setError(null); load(); if (linked.length && onLedgerChanged) onLedgerChanged();
   }
   async function removePayment(p) {
     // Remove the linked expense as well, or the ledger keeps a charge for a
@@ -214,7 +216,8 @@ export function DebtTracker({ session, scope, householdId, ownerId, categories =
     if (p.personal_expense_id) await supabase.from("personal_expenses").delete().eq("id", p.personal_expense_id);
     if (p.income_id) await supabase.from("income").delete().eq("id", p.income_id);
     const { error: err } = await supabase.from("debt_payments").delete().eq("id", p.id);
-    if (!err) { load(); if ((p.household_expense_id || p.personal_expense_id || p.income_id) && onLedgerChanged) onLedgerChanged(); }
+    if (err) return setError(`Couldn't remove payment: ${err.message}`);
+    setError(null); load(); if ((p.household_expense_id || p.personal_expense_id || p.income_id) && onLedgerChanged) onLedgerChanged();
   }
 
   const visible = debts.filter((d) => filter === "all" ? true : filter === "active" ? d.status === "active" : d.status !== "active");

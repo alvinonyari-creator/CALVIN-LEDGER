@@ -147,16 +147,21 @@ function Main({ session }) {
   useEffect(() => { setCurrency(activeHousehold?.currency); }, [activeHousehold?.currency]);
   // Debts and their income-category posting are personal-only now, so this no
   // longer needs to branch on scope.
+  // These belong to the signed-in account, not to whichever tab is open, so
+  // they're fetched once rather than on every tab switch. Re-fetching two
+  // tables on each tap was the cause of the delay when moving between tabs.
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("personal_categories").select("id,name")
-        .eq("user_id", session.user.id).order("sort_order");
-      setPersonalCats(data || []);
-      const { data: ic } = await supabase.from("income_categories").select("id,name")
-        .eq("scope", "personal").eq("user_id", session.user.id).order("sort_order");
-      setIncomeCats(ic || []);
+      const [pc, ic] = await Promise.all([
+        supabase.from("personal_categories").select("id,name")
+          .eq("user_id", session.user.id).order("sort_order"),
+        supabase.from("income_categories").select("id,name")
+          .eq("scope", "personal").eq("user_id", session.user.id).order("sort_order"),
+      ]);
+      setPersonalCats(pc.data || []);
+      setIncomeCats(ic.data || []);
     })();
-  }, [mode]);
+  }, [session.user.id]);
   useEffect(() => {
     if (!activeId) return;
     // Switching households invalidates anything half-entered, and a category
@@ -232,7 +237,7 @@ function Main({ session }) {
   async function loadAll() {
     const seq = ++loadSeq.current;
     const requestedFor = activeId;
-    const [p, c, t, e, o, a, tm, mc] = await Promise.all([
+    const [p, c, t, e, o, a, tm, mc, ml] = await Promise.all([
       supabase.from("people").select("*").eq("household_id", activeId).order("name"),
       supabase.from("categories").select("*").eq("household_id", activeId).order("sort_order"),
       supabase.from("templates").select("*").eq("household_id", activeId).order("created_at"),
@@ -241,6 +246,11 @@ function Main({ session }) {
       supabase.from("audit_log").select("*").eq("household_id", activeId).order("created_at", { ascending: false }).limit(100),
       supabase.from("terms").select("*").eq("household_id", activeId).order("sort_order"),
       supabase.from("household_members").select("id").eq("household_id", activeId),
+      // Runs alongside the rest rather than after it. As a separate sequential
+      // call this added a full round-trip to every household load, and its
+      // error was discarded - so if it failed, the "Paid by" feature silently
+      // vanished with no way to tell why.
+      supabase.rpc("household_member_list", { p_household_id: activeId }),
     ]);
     // A newer request has started, or the household changed while this was in
     // flight - discard rather than overwrite fresher data.
@@ -266,8 +276,10 @@ function Main({ session }) {
     setAudit(a.data || []);
     setTerms(tm.data || []);
     setMemberCount((mc.data || []).length || 1);
-    const { data: ml } = await supabase.rpc("household_member_list", { p_household_id: activeId });
-    setMembers(ml || []);
+    if (ml.error) {
+      setError(`Couldn't load household members, so "Paid by" is unavailable: ${ml.error.message}`);
+    }
+    setMembers(ml.data || []);
     if (c.data?.length) {
       setForm((f) => ({ ...f, category: f.category || c.data[0].name }));
       setOblForm((f) => ({ ...f, category: f.category || c.data[0].name }));
@@ -588,8 +600,11 @@ function Main({ session }) {
   }
 
   async function deleteEntry(e) {
+    // A shared ledger entry is a real financial record and there is no undo,
+    // so a single mis-tap on the bin icon should not destroy it silently.
+    if (!window.confirm(`Delete this ${fmt(e.amount)} ${e.category} entry? This can't be undone.`)) return;
     const { error: err } = await supabase.from("expenses").delete().eq("id", e.id);
-    if (err) return setError("Delete failed.");
+    if (err) return setError(`Couldn't delete: ${err.message}`);
     log("deleted", "expense", `${fmt(e.amount)} · ${e.category}`);
     loadAll();
   }

@@ -95,10 +95,11 @@ export function IncomeLedger({ session, scope, householdId, ownerId, viewMonth, 
     setEditingId(null); setShowForm(false); load();
   }
 
-  async function remove(id) {
-    const { error: err } = await supabase.from("income").delete().eq("id", id);
-    if (err) return setError("Delete failed.");
-    load();
+  async function remove(entry) {
+    if (!window.confirm(`Delete this ${fmt(entry.amount)} ${entry.category} entry? This can't be undone.`)) return;
+    const { error: err } = await supabase.from("income").delete().eq("id", entry.id);
+    if (err) return setError(`Couldn't delete: ${err.message}`);
+    setError(null); load();
   }
 
   function shiftMonth(d) {
@@ -226,7 +227,7 @@ export function IncomeLedger({ session, scope, householdId, ownerId, viewMonth, 
             </div>
             {!readOnly && <>
               <button onClick={() => { setForm({ amount: String(e.amount), category: e.category, source: e.source || "", note: e.note || "", reference: e.reference || "", date: toDTLocal(e.date) }); setEditingId(e.id); setShowForm(true); }} style={iconBtn}><Pencil size={14} /></button>
-              <button onClick={() => remove(e.id)} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={15} /></button>
+              <button onClick={() => remove(e)} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={15} /></button>
             </>}
           </div>
         );
