@@ -125,14 +125,16 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
     <Shell>
       <div style={{ marginBottom: 22 }}>
         <Wordmark />
-        <div style={{ fontSize: 14, color: "var(--ls-textFaint)", marginTop: 10 }}>{monthLabel(viewMonth)}</div>
+        <div style={{ fontSize: 14, color: "var(--ls-textFaint)", marginTop: 10 }}>
+          {isAdmin ? `Administrator · ${monthLabel(viewMonth)}` : monthLabel(viewMonth)}
+        </div>
       </div>
 
       {/* A spending cap is optional. With one, the ring measures against it.
           Without, the same space compares this month to the recent average -
           which needs no setup at all, so a brand new household still gets a
           headline figure instead of a blank space. */}
-      {household.categories > 0 && (
+      {!isAdmin && household.categories > 0 && (
         <div style={{ marginBottom: 20 }}>
           {household.cap > 0 ? (
             <Ring
@@ -173,25 +175,28 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
         </div>
       )}
 
+      {/* An administrator account has no ledger of its own - every tile points
+          at somebody else's records, read-only, and must never invite it to
+          create categories, join a household, or record a debt. */}
       <Tile
         icon={Wallet} tint="var(--ls-info)" label="Personal"
-        sub="Only you can see these"
+        sub={isAdmin ? "View any person's ledger, read-only" : "Only you can see these"}
         total={personal.total} income={personal.income}
-        trend={monthlyTotals(personal.rows, viewMonth)}
-        ready={personal.categories > 0}
-        cta="Set up your categories to get started"
+        trend={isAdmin ? null : monthlyTotals(personal.rows, viewMonth)}
+        ready={isAdmin ? false : personal.categories > 0}
+        cta={isAdmin ? "Choose a person to view" : "Set up your categories to get started"}
         onClick={onOpenPersonal}
       />
 
       <Tile
         icon={Users} tint="var(--ls-info)"
-        label={primary ? primary.name : "Household"}
-        sub={primary ? "Shared with your household members" : "Create one, or join with an invite code"}
+        label={primary ? primary.name : isAdmin ? "Households" : "Household"}
+        sub={primary ? "Shared with your household members" : isAdmin ? "View any household, read-only" : "Create one, or join with an invite code"}
         total={household.total}
         trend={monthlyTotals(household.rows, viewMonth)}
         ready={Boolean(primary) && household.categories > 0}
-        cta={primary ? "Add expense types to get started" : "Create or join a household"}
-        onClick={() => (primary ? onOpenHousehold() : onCreateOrJoin())}
+        cta={primary ? "Add expense types to get started" : isAdmin ? "Browse households" : "Create or join a household"}
+        onClick={() => (primary || isAdmin ? onOpenHousehold() : onCreateOrJoin())}
       />
 
       <button onClick={onOpenDebts} style={{
@@ -205,12 +210,16 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 16, fontWeight: 500 }}>Debts</div>
             <div style={{ fontSize: 12, color: "var(--ls-textFaint)" }}>
-              {debt.overdue > 0 ? `${debt.overdue} overdue` : "What you owe and what you're owed"}
+              {isAdmin
+                ? "View any person's debts, read-only"
+                : debt.overdue > 0 ? `${debt.overdue} overdue` : "What you owe and what you're owed"}
             </div>
           </div>
           <ChevronRight size={18} color="var(--ls-textFaintest)" />
         </div>
-        {debt.any ? (
+        {isAdmin ? (
+          <div style={{ fontSize: 13, color: "var(--ls-accent)" }}>Choose a person to view</div>
+        ) : debt.any ? (
           <div style={{ display: "flex", gap: 16 }}>
             <div>
               <div style={{ fontSize: 10, color: "var(--ls-textFaint)" }}>You owe</div>
@@ -249,7 +258,7 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
         ))}
       </div>
 
-      {onDeleteAccount && (
+      {onDeleteAccount && !isAdmin && (
         <button onClick={onDeleteAccount} style={{
           width: "100%", marginTop: 10, background: "transparent", color: "var(--ls-negative)",
           border: "1px solid #4A2020", borderRadius: 12, padding: "10px 0", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
