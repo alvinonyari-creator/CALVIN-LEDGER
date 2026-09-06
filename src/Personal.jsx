@@ -17,6 +17,11 @@ export function PersonalLedger({ session, ownerId, ownerLabel, readOnly, viewMon
   const [entries, setEntries] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(null);
+  // Household expenses this person paid for, per household. Shown as a summary
+  // on the personal tab so "what did I actually spend" has a real answer -
+  // deliberately NOT mixed into the entries list (they aren't editable here)
+  // and NOT counted against the personal cap (a rent payment would blow it).
+  const [contributions, setContributions] = useState([]);
   const [localMonth, setLocalMonth] = useState(monthKey(nowDT()));
   const viewMonth = vmProp ?? localMonth;
   const setViewMonth = setVmProp ?? setLocalMonth;
@@ -38,10 +43,13 @@ export function PersonalLedger({ session, ownerId, ownerLabel, readOnly, viewMon
   async function load() {
     const seq = ++loadSeq.current;
     const requestedFor = uid;
-    const [c, e, st] = await Promise.all([
+    const [c, e, st, hh] = await Promise.all([
       supabase.from("personal_categories").select("*").eq("user_id", uid).order("sort_order"),
       supabase.from("personal_expenses").select("*").eq("user_id", uid).order("date", { ascending: false }),
       supabase.from("personal_settings").select("*").eq("user_id", uid).maybeSingle(),
+      // Household expenses this person is recorded as having paid for. RLS
+      // already limits this to households they belong to.
+      supabase.from("expenses").select("amount,date,household_id").eq("paid_by_user_id", uid),
     ]);
     setSettings(st.data || null);
     const missing = [["personal_categories", c], ["personal_expenses", e]]
@@ -55,6 +63,16 @@ export function PersonalLedger({ session, ownerId, ownerLabel, readOnly, viewMon
     if (seq !== loadSeq.current || requestedFor !== uid) return;
     setCategories(c.data || []);
     setEntries(e.data || []);
+    // Resolve household names for whatever they contributed to.
+    const hhRows = hh.data || [];
+    if (hhRows.length) {
+      const ids = [...new Set(hhRows.map((r) => r.household_id).filter(Boolean))];
+      const { data: names } = await supabase.from("households").select("id,name").in("id", ids);
+      const nameById = new Map((names || []).map((h) => [h.id, h.name]));
+      setContributions(hhRows.map((r) => ({ ...r, householdName: nameById.get(r.household_id) || "Household" })));
+    } else {
+      setContributions([]);
+    }
     if (c.data?.length) setForm((f) => ({ ...f, category: f.category || c.data[0].name }));
     setLoaded(true);
   }
@@ -63,6 +81,20 @@ export function PersonalLedger({ session, ownerId, ownerLabel, readOnly, viewMon
   const searching = search.trim().length > 0;
   const monthEntries = entries.filter((e) => monthKey(e.date) === viewMonth);
   const monthTotal = monthEntries.reduce((s, e) => s + Number(e.amount), 0);
+  // Grouped per household, for the month being viewed. Kept entirely separate
+  // from monthTotal so it never reaches computeMonthlyTotal and the cap.
+  const contributionsThisMonth = (() => {
+    const map = new Map();
+    contributions
+      .filter((r) => monthKey(r.date) === viewMonth)
+      .forEach((r) => {
+        const cur = map.get(r.household_id) || { id: r.household_id, name: r.householdName, total: 0, count: 0 };
+        cur.total += Number(r.amount); cur.count += 1;
+        map.set(r.household_id, cur);
+      });
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  })();
+  const contributionsTotal = contributionsThisMonth.reduce((s, h) => s + h.total, 0);
   const scoped = searching
     ? entries.filter((e) => {
         const q = search.toLowerCase();
@@ -163,6 +195,35 @@ export function PersonalLedger({ session, ownerId, ownerLabel, readOnly, viewMon
             <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 20, color: "var(--ls-accent)" }}>{fmt(monthTotal)}</div>
           </div>
           <button onClick={() => shiftMonth(1)} style={iconBtn}><ChevronRight size={18} /></button>
+        </div>
+      )}
+
+      {contributionsThisMonth.length > 0 && !searching && (
+        <div style={{ marginBottom: 20 }}>
+          <SectionLabel>This month, in total</SectionLabel>
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ls-textDim)", padding: "3px 0" }}>
+              <span>Personal spending</span>
+              <span style={{ fontFamily: "ui-monospace, monospace" }}>{fmt(monthTotal)}</span>
+            </div>
+            {contributionsThisMonth.map((h) => (
+              <div key={h.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ls-textDim)", padding: "3px 0" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
+                  {h.name} <span style={{ color: "var(--ls-textFaint)" }}>({h.count})</span>
+                </span>
+                <span style={{ fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>{fmt(h.total)}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 600, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--ls-border)" }}>
+              <span>Total out</span>
+              <span style={{ fontFamily: "ui-monospace, monospace", color: "var(--ls-accent)" }}>{fmt(monthTotal + contributionsTotal)}</span>
+            </div>
+            <div style={{ fontSize: 10.5, color: "var(--ls-textFaint)", marginTop: 8, lineHeight: 1.5 }}>
+              Household amounts are what you personally paid for. They are shown here for
+              your own picture only - they belong to the household ledger, are edited there,
+              and are not counted against your personal cap.
+            </div>
+          </Card>
         </div>
       )}
 
