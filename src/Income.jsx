@@ -14,6 +14,7 @@ export function IncomeLedger({ session, scope, householdId, ownerId, viewMonth, 
   // this one is showing, so a prop would go stale the moment the month changed
   // and the net figure would quietly report the wrong savings.
   const [allExpenses, setAllExpenses] = useState([]);
+  const [contributions, setContributions] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
@@ -34,12 +35,16 @@ export function IncomeLedger({ session, scope, householdId, ownerId, viewMonth, 
 
   async function load() {
     const seq = ++loadSeq.current;
-    const [c, e, x] = await Promise.all([
+    const [c, e, x, hh] = await Promise.all([
       supabase.from("income_categories").select("*")
         .eq("scope", "personal").eq("user_id", targetUserId).order("sort_order"),
       supabase.from("income").select("*")
         .eq("scope", "personal").eq("user_id", targetUserId).order("date", { ascending: false }),
       supabase.from("personal_expenses").select("amount,date").eq("user_id", targetUserId),
+      // Household expenses this person paid for. Without these the net figure
+      // counts all their income but only part of their spending, which reads
+      // as a healthy surplus when they may in fact be well down for the month.
+      supabase.from("expenses").select("amount,date").eq("paid_by_user_id", targetUserId),
     ]);
     const missing = [c, e].filter((r) => r.error && /does not exist|schema cache/i.test(r.error.message || ""));
     if (missing.length) setError("Database setup incomplete - run supabase-schema-v12.sql.");
@@ -48,6 +53,7 @@ export function IncomeLedger({ session, scope, householdId, ownerId, viewMonth, 
     setCategories(c.data || []);
     setEntries(e.data || []);
     setAllExpenses(x.data || []);
+    setContributions(hh.data || []);
     if (c.data?.length) setForm((f) => ({ ...f, category: f.category || c.data[0].name }));
     setLoaded(true);
   }
@@ -70,9 +76,15 @@ export function IncomeLedger({ session, scope, householdId, ownerId, viewMonth, 
   const maxCat = Math.max(1, ...byCategory.map((c) => c.total));
   // Recomputed from the fetched rows against the currently viewed month, so it
   // stays correct when the month is changed from this screen.
-  const expenseTotalForMonth = allExpenses
+  const personalExpensesThisMonth = allExpenses
     .filter((e) => monthKey(e.date) === viewMonth)
     .reduce((s, e) => s + Number(e.amount), 0);
+  const householdPaidThisMonth = contributions
+    .filter((e) => monthKey(e.date) === viewMonth)
+    .reduce((s, e) => s + Number(e.amount), 0);
+  // Money out is everything this person actually paid, personal and household
+  // alike - matching the "Total out" figure on the Expenses tab.
+  const expenseTotalForMonth = personalExpensesThisMonth + householdPaidThisMonth;
   const net = monthTotal - expenseTotalForMonth;
 
   async function save(ev) {
@@ -153,9 +165,14 @@ export function IncomeLedger({ session, scope, householdId, ownerId, viewMonth, 
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ls-textDim)", marginBottom: 3 }}>
               <span>Income</span><span style={{ fontFamily: "ui-monospace, monospace", color: "var(--ls-positive)" }}>{fmt(monthTotal)}</span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ls-textDim)", marginBottom: 6 }}>
-              <span>Expenses</span><span style={{ fontFamily: "ui-monospace, monospace", color: "var(--ls-warn)" }}>{fmt(expenseTotalForMonth)}</span>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ls-textDim)", marginBottom: householdPaidThisMonth > 0 ? 3 : 6 }}>
+              <span>Personal expenses</span><span style={{ fontFamily: "ui-monospace, monospace", color: "var(--ls-warn)" }}>{fmt(personalExpensesThisMonth)}</span>
             </div>
+            {householdPaidThisMonth > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ls-textDim)", marginBottom: 6 }}>
+                <span>Paid toward households</span><span style={{ fontFamily: "ui-monospace, monospace", color: "var(--ls-warn)" }}>{fmt(householdPaidThisMonth)}</span>
+              </div>
+            )}
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 600, paddingTop: 8, borderTop: "1px solid var(--ls-border)" }}>
               <span>{net >= 0 ? "Net saved" : "Net shortfall"}</span>
               <span style={{ fontFamily: "ui-monospace, monospace", color: net >= 0 ? "var(--ls-positive)" : "var(--ls-negative)" }}>{fmt(Math.abs(net))}</span>
