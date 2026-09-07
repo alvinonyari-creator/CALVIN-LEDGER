@@ -14,20 +14,33 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
   const [household, setHousehold] = useState({ total: 0, categories: 0, rows: [], cap: null, loaded: false });
   const [debt, setDebt] = useState({ owe: 0, owed: 0, overdue: 0, any: false });
   const [themePref, setThemePref] = useState(getThemePreference());
+  // What this person paid toward any household. The headline and the Personal
+  // tile's Net both need it: without it the headline showed the household's
+  // whole spend (not this person's), and Net counted all their income against
+  // only their personal expenses.
+  const [contributions, setContributions] = useState([]);
   const viewMonth = monthKey(nowDT());
   const primary = myHouseholds[0] || null;
+  // Everything this person actually paid this month, personal and household
+  // alike. The household tile still shows the household's own total separately.
+  const paidToHouseholds = contributions
+    .filter((r) => monthKey(r.date) === viewMonth)
+    .reduce((s, r) => s + Number(r.amount), 0);
+  const myTotalOut = personal.total + paidToHouseholds;
 
   useEffect(() => { loadPersonal(); loadDebts(); }, []);
   useEffect(() => { if (primary) loadHousehold(primary.id); else setHousehold({ total: 0, categories: 0, rows: [], cap: null, loaded: true }); }, [primary?.id]);
 
   async function loadPersonal() {
-    const [c, e, i] = await Promise.all([
+    const [c, e, i, hh] = await Promise.all([
       supabase.from("personal_categories").select("id").eq("user_id", session.user.id),
       supabase.from("personal_expenses").select("amount,date").eq("user_id", session.user.id),
       supabase.from("income").select("amount,date").eq("scope", "personal").eq("user_id", session.user.id),
+      supabase.from("expenses").select("amount,date").eq("paid_by_user_id", session.user.id),
     ]);
     const inMonth = (rows) => (rows || []).filter((x) => monthKey(x.date) === viewMonth).reduce((s, x) => s + Number(x.amount), 0);
     setPersonal({ total: inMonth(e.data), income: inMonth(i.data), categories: (c.data || []).length, rows: e.data || [], loaded: true });
+    setContributions(hh.data || []);
   }
 
   // Debts are personal-only now - query scope='personal' directly rather than
@@ -73,7 +86,7 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
     });
   }
 
-  const Tile = ({ icon: Icon, tint, label, sub, total, income, trend, ready, onClick, cta }) => (
+  const Tile = ({ icon: Icon, tint, label, sub, total, income, alsoOut = 0, trend, ready, onClick, cta }) => (
     <button onClick={onClick} style={{
       width: "100%", textAlign: "left", background: "var(--ls-surface)", border: "1px solid var(--ls-border)",
       borderRadius: 14, padding: 16, marginBottom: 12, cursor: "pointer", fontFamily: "inherit", color: "var(--ls-text)",
@@ -102,8 +115,8 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
               </div>
               <div>
                 <div style={{ fontSize: 10, color: "var(--ls-textFaint)" }}>Net</div>
-                <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 19, color: income - total >= 0 ? "var(--ls-positive)" : "var(--ls-negative)", fontVariantNumeric: "tabular-nums" }}>
-                  {fmt(Math.abs(income - total))}
+                <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 19, color: income - (total + alsoOut) >= 0 ? "var(--ls-positive)" : "var(--ls-negative)", fontVariantNumeric: "tabular-nums" }}>
+                  {fmt(Math.abs(income - (total + alsoOut)))}
                 </div>
               </div>
             </>
@@ -150,14 +163,26 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
             />
           ) : (
             <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
+              {/* This is what YOU paid out - personal plus your share of any
+                  household - not the household's own total, which has its own
+                  tile below. Labelled explicitly so the two aren't confused. */}
               <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 34, color: "var(--ls-accent)", fontVariantNumeric: "tabular-nums" }}>
-                {fmt(household.total)}
+                {fmt(myTotalOut)}
               </div>
               <div style={{ fontSize: 11, color: "var(--ls-textFaint)", marginTop: 2 }}>
-                spent this month
+                you paid out this month
               </div>
+              {paidToHouseholds > 0 && (
+                <div style={{ fontSize: 10.5, color: "var(--ls-textFaintest)", marginTop: 3 }}>
+                  {fmt(personal.total)} personal &middot; {fmt(paidToHouseholds)} household
+                </div>
+              )}
               {(() => {
-                const cmp = compareToHistory(household.rows, household.total, viewMonth);
+                // Compared against the same measure shown above - this person's
+                // own outlay - not the household's total, or the percentage
+                // would describe a different number than the one displayed.
+                const myRows = [...personal.rows, ...contributions];
+                const cmp = compareToHistory(myRows, myTotalOut, viewMonth);
                 if (!cmp) return null;
                 if (cmp.same) return (
                   <div style={{ fontSize: 12, color: "var(--ls-textFaint)", marginTop: 6 }}>
@@ -181,7 +206,7 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
       <Tile
         icon={Wallet} tint="var(--ls-info)" label="Personal"
         sub={isAdmin ? "View any person's ledger, read-only" : "Only you can see these"}
-        total={personal.total} income={personal.income}
+        total={personal.total} income={personal.income} alsoOut={paidToHouseholds}
         trend={isAdmin ? null : monthlyTotals(personal.rows, viewMonth)}
         ready={isAdmin ? false : personal.categories > 0}
         cta={isAdmin ? "Choose a person to view" : "Set up your categories to get started"}
