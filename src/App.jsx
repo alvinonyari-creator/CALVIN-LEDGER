@@ -336,7 +336,11 @@ function Main({ session }) {
   }
   // A dedicated admin account has no household of its own — send it straight to
   // the selector rather than forcing it through household creation.
-  if (mode === "home") {
+  // The forceSetup guard has to be here too. Without it, tapping "Create or
+  // join a household" from the Home screen set forceSetup, re-rendered, hit
+  // this branch first, and returned Home again - the setup screen below was
+  // unreachable and the button appeared to do nothing.
+  if (mode === "home" && !forceSetup) {
     return (
       <>
         {pendingJoin && (
@@ -1158,8 +1162,8 @@ function HouseholdSetup({ session, onDone, canCancel, onCancel, onSwitchToPerson
       <h1 style={{ fontSize: 26, margin: "0 0 16px", fontWeight: 500 }}>{mode === "create" ? "Create your household" : "Join a household"}</h1>
       {mode === "create" ? (
         <form onSubmit={create} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <input placeholder="Household name (e.g. Eldon Family Tracker)" value={name} onChange={(e) => setName(e.target.value)} style={input} required autoFocus />
-          <input placeholder="People, comma separated (e.g. Calvin, Lydia)" value={members} onChange={(e) => setMembers(e.target.value)} style={input} />
+          <input placeholder="Household name" value={name} onChange={(e) => setName(e.target.value)} style={input} required autoFocus />
+          <input placeholder="People in the household, comma separated" value={members} onChange={(e) => setMembers(e.target.value)} style={input} />
           <button type="submit" disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }}>{busy ? "Creating…" : "Create household"}</button>
           <div style={{ fontSize: 11, color: "var(--ls-textFaint)", lineHeight: 1.5 }}>Your household starts empty. You will add your own expense types and budgets next.</div>
         </form>

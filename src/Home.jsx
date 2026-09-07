@@ -147,7 +147,10 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
           Without, the same space compares this month to the recent average -
           which needs no setup at all, so a brand new household still gets a
           headline figure instead of a blank space. */}
-      {!isAdmin && household.categories > 0 && (
+      {/* Shown whenever there is anything to show. Gating this on household
+          categories meant someone using the app for personal spending only got
+          no headline figure at all. */}
+      {!isAdmin && (household.categories > 0 || personal.categories > 0) && (
         <div style={{ marginBottom: 20 }}>
           {household.cap > 0 ? (
             <Ring
@@ -213,16 +216,22 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
         onClick={onOpenPersonal}
       />
 
-      <Tile
-        icon={Users} tint="var(--ls-info)"
-        label={primary ? primary.name : isAdmin ? "Households" : "Household"}
-        sub={primary ? "Shared with your household members" : isAdmin ? "View any household, read-only" : "Create one, or join with an invite code"}
-        total={household.total}
-        trend={monthlyTotals(household.rows, viewMonth)}
-        ready={Boolean(primary) && household.categories > 0}
-        cta={primary ? "Add expense types to get started" : isAdmin ? "Browse households" : "Create or join a household"}
-        onClick={() => (primary || isAdmin ? onOpenHousehold() : onCreateOrJoin())}
-      />
+      {/* Shown only to someone who is actually in a household, or to an
+          administrator browsing them. Deriving this from real membership rather
+          than asking at sign-up means it can never disagree with reality - and
+          it appears on its own the moment someone joins one. */}
+      {(primary || isAdmin) && (
+        <Tile
+          icon={Users} tint="var(--ls-info)"
+          label={primary ? primary.name : "Households"}
+          sub={primary ? "Shared with your household members" : "View any household, read-only"}
+          total={household.total}
+          trend={isAdmin ? null : monthlyTotals(household.rows, viewMonth)}
+          ready={Boolean(primary) && household.categories > 0}
+          cta={primary ? "Add expense types to get started" : "Browse households"}
+          onClick={onOpenHousehold}
+        />
+      )}
 
       <button onClick={onOpenDebts} style={{
         width: "100%", textAlign: "left", background: "var(--ls-surface)", border: "1px solid var(--ls-border)",
@@ -260,10 +269,25 @@ export function HomeScreen({ session, myHouseholds, isAdmin, onOpenPersonal, onO
         )}
       </button>
 
-      {myHouseholds.length > 0 && (
-        <button onClick={onCreateOrJoin} style={{ ...smallGhost, marginTop: 4 }}>
-          <Plus size={13} style={{ marginRight: 4, verticalAlign: -2 }} />
-          {myHouseholds.length > 1 ? `Create or join another (you're in ${myHouseholds.length})` : "Create or join another household"}
+      {/* Deliberately quiet - a plain line, not a button. Someone who doesn't
+          use households shouldn't be sold one, but it has to remain findable,
+          and it's now the ONLY route in for anyone not already in a household
+          since the tile above is hidden from them. */}
+      {!isAdmin && (
+        <button
+          onClick={onCreateOrJoin}
+          style={{
+            width: "100%", textAlign: "left", background: "transparent", border: "none",
+            color: "var(--ls-textFaintest)", fontFamily: "inherit", fontSize: 12.5,
+            padding: "10px 2px", marginTop: 2, cursor: "pointer",
+          }}
+        >
+          <Plus size={12} style={{ marginRight: 5, verticalAlign: -2 }} />
+          {myHouseholds.length === 0
+            ? "Create or join a household"
+            : myHouseholds.length > 1
+              ? `Create or join another (you're in ${myHouseholds.length})`
+              : "Create or join another household"}
         </button>
       )}
 
