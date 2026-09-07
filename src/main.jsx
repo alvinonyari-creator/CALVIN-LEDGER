@@ -2,9 +2,11 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import { applyTheme, watchSystemTheme } from "./theme";
+import { initAutoUpdate } from "./updates";
 
 applyTheme();
 watchSystemTheme();
+initAutoUpdate();
 
 // Without this, any error thrown while rendering unmounts the whole tree and
 // leaves a blank white page with nothing on screen to act on.
