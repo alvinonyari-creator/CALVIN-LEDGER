@@ -12,6 +12,10 @@ export default defineConfig({
         clientsClaim: true,
         skipWaiting: true,
         cleanupOutdatedCaches: true,
+        // Without this, the browser may serve a cached index.html and never
+        // discover that a new build exists - the app looks permanently stale
+        // until it's deleted and re-added.
+        navigateFallback: "index.html",
         navigateFallbackDenylist: [/^\/api/],
         runtimeCaching: [
           { urlPattern: ({ url }) => url.hostname.endsWith("supabase.co"), handler: "NetworkOnly" },
