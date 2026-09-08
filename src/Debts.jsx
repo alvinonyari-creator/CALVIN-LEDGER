@@ -200,11 +200,19 @@ export function DebtTracker({ session, scope, householdId, ownerId, categories =
       ? `Delete "${d.counterparty}", its ${(payments[d.id] || []).length} recorded payment(s), and the ${linked.length} matching ledger entr${linked.length === 1 ? "y" : "ies"}? This can't be undone.`
       : `Delete "${d.counterparty}" and all its recorded payments? This can't be undone.`;
     if (!window.confirm(warning)) return;
-    for (const p of linked) {
-      if (p.household_expense_id) await supabase.from("expenses").delete().eq("id", p.household_expense_id);
-      if (p.personal_expense_id) await supabase.from("personal_expenses").delete().eq("id", p.personal_expense_id);
-      if (p.income_id) await supabase.from("income").delete().eq("id", p.income_id);
-    }
+    // Batched into one query per table rather than one per payment. A debt with
+    // a dozen payments was previously a dozen sequential round-trips, which on
+    // a phone connection is a visible wait on a destructive action.
+    const hhIds = linked.map((p) => p.household_expense_id).filter(Boolean);
+    const perIds = linked.map((p) => p.personal_expense_id).filter(Boolean);
+    const incIds = linked.map((p) => p.income_id).filter(Boolean);
+    const cleanup = await Promise.all([
+      hhIds.length ? supabase.from("expenses").delete().in("id", hhIds) : null,
+      perIds.length ? supabase.from("personal_expenses").delete().in("id", perIds) : null,
+      incIds.length ? supabase.from("income").delete().in("id", incIds) : null,
+    ]);
+    const cleanupErr = cleanup.find((r) => r && r.error);
+    if (cleanupErr) return setError(`Couldn't remove the linked entries: ${cleanupErr.error.message}`);
     const { error: err } = await supabase.from("debts").delete().eq("id", d.id);
     if (err) return setError(`Couldn't delete: ${err.message}`);
     setError(null); load(); if (linked.length && onLedgerChanged) onLedgerChanged();
@@ -212,9 +220,13 @@ export function DebtTracker({ session, scope, householdId, ownerId, categories =
   async function removePayment(p) {
     // Remove the linked expense as well, or the ledger keeps a charge for a
     // payment that no longer exists.
-    if (p.household_expense_id) await supabase.from("expenses").delete().eq("id", p.household_expense_id);
-    if (p.personal_expense_id) await supabase.from("personal_expenses").delete().eq("id", p.personal_expense_id);
-    if (p.income_id) await supabase.from("income").delete().eq("id", p.income_id);
+    const cleanup = await Promise.all([
+      p.household_expense_id ? supabase.from("expenses").delete().eq("id", p.household_expense_id) : null,
+      p.personal_expense_id ? supabase.from("personal_expenses").delete().eq("id", p.personal_expense_id) : null,
+      p.income_id ? supabase.from("income").delete().eq("id", p.income_id) : null,
+    ]);
+    const cleanupErr = cleanup.find((r) => r && r.error);
+    if (cleanupErr) return setError(`Couldn't remove the linked entry: ${cleanupErr.error.message}`);
     const { error: err } = await supabase.from("debt_payments").delete().eq("id", p.id);
     if (err) return setError(`Couldn't remove payment: ${err.message}`);
     setError(null); load(); if ((p.household_expense_id || p.personal_expense_id || p.income_id) && onLedgerChanged) onLedgerChanged();

@@ -831,7 +831,12 @@ function Main({ session }) {
                   <Card key={o.id}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14 }}><I size={14} color={cat.color} />{o.title}</div>
-                      {!readOnly && <button onClick={async () => { const { error: dErr } = await supabase.from("obligations").delete().eq("id", o.id); if (dErr) return setError("Couldn't delete that obligation."); log("deleted", "obligation", o.title); loadAll(); }} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={14} /></button>}
+                      {!readOnly && <button onClick={async () => {
+                        if (!window.confirm(`Delete the obligation "${o.title}"? Expenses logged against it are kept.`)) return;
+                        const { error: dErr } = await supabase.from("obligations").delete().eq("id", o.id);
+                        if (dErr) return setError("Couldn't delete that obligation: " + dErr.message);
+                        log("deleted", "obligation", o.title); loadAll();
+                      }} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={14} /></button>}
                     </div>
                     <div style={{ fontSize: 12, color: "var(--ls-textDim)", fontFamily: "ui-monospace, monospace" }}>{fmt(paid)} / {fmt(o.total_amount)}</div>
                     <Big positive={rem <= 0}>{rem < 0 ? `${fmt(Math.abs(rem))} overpaid` : `${fmt(rem)} remaining`}</Big>

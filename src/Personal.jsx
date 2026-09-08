@@ -393,18 +393,30 @@ const pill = (active) => ({
 function PersonalMonthlyCap({ uid, settings, reload }) {
   const [value, setValue] = useState(settings?.monthly_budget ?? "");
   const [saved, setSaved] = useState(false);
+  const [capError, setCapError] = useState(null);
   useEffect(() => { setValue(settings?.monthly_budget ?? ""); }, [settings?.monthly_budget]);
 
   async function save() {
-    const amount = value === "" ? null : Number(value);
+    // Blank clears the cap, which is valid. Anything else has to be a real
+    // amount - "12,000" silently became 12 before parseAmount was used here.
+    let amount = null;
+    if (value !== "") {
+      amount = parseAmount(value);
+      if (amount === null) {
+        setCapError("Enter the cap as plain digits, e.g. 30000 - or leave it blank for no cap.");
+        return;
+      }
+    }
     const { error } = await supabase.from("personal_settings")
       .upsert({ user_id: uid, monthly_budget: amount, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
-    if (!error) { setSaved(true); reload(); setTimeout(() => setSaved(false), 2000); }
+    if (error) { setCapError(`Couldn't save: ${error.message}`); return; }
+    setCapError(null); setSaved(true); reload(); setTimeout(() => setSaved(false), 2000);
   }
 
   return (
     <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--ls-border)" }}>
       <div style={{ fontSize: 12, color: "var(--ls-textDim)", marginBottom: 6 }}>My monthly cap (optional)</div>
+      {capError && <Banner>{capError}</Banner>}
       <div style={{ display: "flex", gap: 6 }}>
         <input type="number" placeholder="Amount per month" value={value}
           onChange={(e) => setValue(e.target.value)} style={{ ...input, fontSize: 13 }} />
@@ -421,6 +433,41 @@ function PersonalCategories({ uid, categories, settings, reload }) {
   const blank = { name: "", icon_key: "more", color: PALETTE[0], budget_amount: "", budget_period: "", budget_rollover: false, exclude_from_total: false };
   const [draft, setDraft] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [error, setError] = useState(null);
+
+  // Mirrors household categories: one with spending history is archived rather
+  // than deleted. Deleting it outright would lose exclude_from_total, which
+  // silently corrupts the personal spending cap for every past month.
+  async function remove(c) {
+    const { count } = await supabase
+      .from("personal_expenses")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", uid)
+      .eq("category", c.name);
+
+    if (count > 0) {
+      const ok = window.confirm(
+        `"${c.name}" has ${count} entr${count === 1 ? "y" : "ies"} logged against it.\n\n` +
+        `It will be archived rather than deleted: hidden when logging, but kept so past months still add up correctly.`
+      );
+      if (!ok) return;
+      const { error: err } = await supabase.from("personal_categories").update({ archived: true }).eq("id", c.id);
+      if (err) return setError(`Couldn't archive: ${err.message}`);
+      setError(null); reload();
+      return;
+    }
+
+    if (!window.confirm(`Delete the category "${c.name}"?`)) return;
+    const { error: err } = await supabase.from("personal_categories").delete().eq("id", c.id);
+    if (err) return setError(`Couldn't delete: ${err.message}`);
+    setError(null); reload();
+  }
+
+  async function restore(c) {
+    const { error: err } = await supabase.from("personal_categories").update({ archived: false }).eq("id", c.id);
+    if (err) return setError(`Couldn't restore: ${err.message}`);
+    setError(null); reload();
+  }
 
   async function save(e) {
     e.preventDefault();
@@ -432,10 +479,17 @@ function PersonalCategories({ uid, categories, settings, reload }) {
       budget_rollover: draft.budget_rollover,
       exclude_from_total: draft.exclude_from_total,
     };
-    const { error } = editing
+    const { error: err } = editing
       ? await supabase.from("personal_categories").update(payload).eq("id", editing)
       : await supabase.from("personal_categories").insert(payload);
-    if (!error) { setDraft(null); setEditing(null); reload(); }
+    if (err) {
+      return setError(
+        /duplicate key|unique constraint/i.test(err.message)
+          ? `You already have a category named "${payload.name}".`
+          : `Couldn't save: ${err.message}`
+      );
+    }
+    setError(null); setDraft(null); setEditing(null); reload();
   }
 
   const Form = (
@@ -504,8 +558,9 @@ function PersonalCategories({ uid, categories, settings, reload }) {
   return (
     <div style={{ marginBottom: 22, background: "var(--ls-surface2)", border: "1px solid var(--ls-border)", borderRadius: 12, padding: 16 }}>
       <SectionLabel>My categories</SectionLabel>
+      {error && <Banner>{error}</Banner>}
       <PersonalMonthlyCap uid={uid} settings={settings} reload={reload} />
-      {categories.map((c) => {
+      {categories.filter((c) => !c.archived).map((c) => {
         const I = iconFor(c.icon_key);
         return editing === c.id ? <div key={c.id}>{Form}</div> : (
           <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid #1F2E4E" }}>
@@ -515,10 +570,30 @@ function PersonalCategories({ uid, categories, settings, reload }) {
               {c.budget_amount != null && <div style={{ fontSize: 11, color: "var(--ls-textFaint)" }}>{fmt(c.budget_amount)} per {c.budget_period === "yearly" ? "year" : "month"}{c.budget_rollover ? " - carries forward" : " - resets"}{c.exclude_from_total ? " - outside cap" : ""}</div>}
             </div>
             <button onClick={() => { setDraft({ name: c.name, icon_key: c.icon_key, color: c.color, budget_amount: c.budget_amount ?? "", budget_period: c.budget_period ?? "", budget_rollover: c.budget_rollover === true, exclude_from_total: Boolean(c.exclude_from_total) }); setEditing(c.id); }} style={iconBtn}><Pencil size={13} /></button>
-            <button onClick={async () => { await supabase.from("personal_categories").delete().eq("id", c.id); reload(); }} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={13} /></button>
+            <button onClick={() => remove(c)} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={13} /></button>
           </div>
         );
       })}
+      {categories.some((c) => c.archived) && (
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--ls-border)" }}>
+          <div style={{ fontSize: 11, color: "var(--ls-textFaint)", marginBottom: 8 }}>
+            Archived - hidden when logging, kept so past months still add up
+          </div>
+          {categories.filter((c) => c.archived).map((c) => {
+            const I = iconFor(c.icon_key);
+            return (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", opacity: 0.6 }}>
+                <div style={{ width: 22, height: 22, borderRadius: 5, background: c.color + "33", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <I size={12} color={c.color} />
+                </div>
+                <div style={{ flex: 1, fontSize: 13 }}>{c.name}</div>
+                <button onClick={() => restore(c)} style={{ ...smallGhost, width: "auto", padding: "5px 12px", fontSize: 11 }}>Restore</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {draft && !editing ? Form : (
         !editing && <button onClick={() => setDraft(blank)} style={{ ...smallGhost, marginTop: 10 }}>
           <Plus size={13} style={{ marginRight: 4, verticalAlign: -2 }} />Add a category

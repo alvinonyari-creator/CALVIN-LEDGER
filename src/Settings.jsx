@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Trash2, Plus, Pencil } from "lucide-react";
 import { supabase } from "./supabaseClient";
-import { iconFor, ICON_KEYS, PALETTE, fmt, fmtDT, termProblems } from "./lib";
+import { iconFor, ICON_KEYS, PALETTE, fmt, fmtDT, termProblems, parseAmount } from "./lib";
 import { SectionLabel, Banner, input, smallGhost, smallPrimary, iconBtn } from "./ui";
 
 export function Settings({ householdId, household, categories, templates, people, terms, audit, reload, log }) {
@@ -241,8 +241,9 @@ function TemplateManager({ householdId, categories, templates, people, reload, l
 
   async function save(e) {
     e.preventDefault();
-    const amt = Number(draft.amount);
-    if (!draft.label.trim() || !amt) return;
+    const amt = parseAmount(draft.amount);
+    if (!draft.label.trim()) return;
+    if (amt === null) return setError("Enter the amount as plain digits, e.g. 5000");
     const { error: err } = await supabase.from("templates").insert({
       household_id: householdId, label: draft.label.trim(), category: draft.category,
       amount: amt, recipient: draft.recipient,
@@ -252,6 +253,7 @@ function TemplateManager({ householdId, categories, templates, people, reload, l
     setError(null); log("created", "template", draft.label.trim()); setDraft(blank); setAdding(false); reload();
   }
   async function remove(t) {
+    if (!window.confirm(`Delete the quick entry "${t.label}"? Expenses already logged with it are kept.`)) return;
     const { error: err } = await supabase.from("templates").delete().eq("id", t.id);
     if (err) return setError(`Couldn't delete: ${err.message}`);
     setError(null); log("deleted", "template", t.label); reload();
@@ -319,6 +321,15 @@ function PeopleManager({ householdId, household, people, reload }) {
     if (err) return setError(`Couldn't add: ${err.message}`);
     setError(null); setName(""); reload();
   }
+
+  async function removePerson(p) {
+    // Past expenses store the person's name as text, so they keep their
+    // attribution - but say so rather than letting it look like data loss.
+    if (!window.confirm(`Remove "${p.name}"? Past entries that name them are kept.`)) return;
+    const { error: err } = await supabase.from("people").delete().eq("id", p.id);
+    if (err) return setError(`Couldn't remove: ${err.message}`);
+    setError(null); reload();
+  }
   return (
     <div>
       <SectionLabel>People</SectionLabel>
@@ -326,7 +337,7 @@ function PeopleManager({ householdId, household, people, reload }) {
       {people.map((p) => (
         <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #1F2E4E" }}>
           <span style={{ fontSize: 14 }}>{p.name}</span>
-          <button onClick={async () => { await supabase.from("people").delete().eq("id", p.id); reload(); }} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={13} /></button>
+          <button onClick={() => removePerson(p)} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={13} /></button>
         </div>
       ))}
       <form onSubmit={add} style={{ display: "flex", gap: 6, marginTop: 10 }}>
@@ -371,6 +382,15 @@ function TermManager({ householdId, terms, reload }) {
     setError(null); setDraft(null); reload();
   }
 
+  async function removeTerm(t) {
+    // Termly budgets are calculated from these periods, so removing one
+    // changes what past termly categories were measured against.
+    if (!window.confirm(`Delete "${t.name}"? Any termly budgets will be recalculated without it.`)) return;
+    const { error: err } = await supabase.from("terms").delete().eq("id", t.id);
+    if (err) return setError(`Couldn't delete: ${err.message}`);
+    setError(null); reload();
+  }
+
   const toggle = (m) => setDraft((d) => ({
     ...d, months: d.months.includes(m) ? d.months.filter((x) => x !== m) : [...d.months, m].sort((a, b) => a - b),
   }));
@@ -404,7 +424,7 @@ function TermManager({ householdId, terms, reload }) {
             </div>
           </div>
           <button onClick={() => setDraft({ id: t.id, name: t.name, months: t.months || [], sort_order: t.sort_order })} style={iconBtn}><Pencil size={13} /></button>
-          <button onClick={async () => { await supabase.from("terms").delete().eq("id", t.id); reload(); }} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={13} /></button>
+          <button onClick={() => removeTerm(t)} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={13} /></button>
         </div>
       ))}
 
@@ -451,8 +471,11 @@ function MonthlyCap({ household, reload }) {
   const [msg, setMsg] = useState(null);
 
   async function save() {
-    const amount = value === "" ? null : Number(value);
-    if (amount !== null && (isNaN(amount) || amount < 0)) return setMsg("Enter a valid amount, or leave blank for no cap.");
+    let amount = null;
+    if (value !== "") {
+      amount = parseAmount(value);
+      if (amount === null) return setMsg("Enter the cap as plain digits, e.g. 250000 - or leave blank for no cap.");
+    }
     const { error } = await supabase.from("households").update({ monthly_budget: amount }).eq("id", household.id);
     if (error) return setMsg(error.message);
     setMsg(null); setSaved(true); reload(); setTimeout(() => setSaved(false), 2000);

@@ -291,15 +291,55 @@ function IncomeCategories({ owner, categories, reload }) {
   const blank = { name: "", icon_key: "work", color: PALETTE[4] };
   const [draft, setDraft] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [error, setError] = useState(null);
+
+  // Archived rather than deleted when it has history, so past months still
+  // attribute their income correctly.
+  async function remove(c) {
+    const { count } = await supabase
+      .from("income")
+      .select("id", { count: "exact", head: true })
+      .eq("scope", "personal").eq("user_id", owner.user_id).eq("category", c.name);
+
+    if (count > 0) {
+      const ok = window.confirm(
+        `"${c.name}" has ${count} entr${count === 1 ? "y" : "ies"} logged against it.\n\n` +
+        `It will be archived rather than deleted: hidden when recording income, but kept so past months still add up.`
+      );
+      if (!ok) return;
+      const { error: err } = await supabase.from("income_categories").update({ archived: true }).eq("id", c.id);
+      if (err) return setError(`Couldn't archive: ${err.message}`);
+      setError(null); reload();
+      return;
+    }
+
+    if (!window.confirm(`Delete the category "${c.name}"?`)) return;
+    const { error: err } = await supabase.from("income_categories").delete().eq("id", c.id);
+    if (err) return setError(`Couldn't delete: ${err.message}`);
+    setError(null); reload();
+  }
+
+  async function restore(c) {
+    const { error: err } = await supabase.from("income_categories").update({ archived: false }).eq("id", c.id);
+    if (err) return setError(`Couldn't restore: ${err.message}`);
+    setError(null); reload();
+  }
 
   async function save(e) {
     e.preventDefault();
     if (!draft.name.trim()) return;
     const payload = { ...owner, name: draft.name.trim(), icon_key: draft.icon_key, color: draft.color };
-    const { error } = editing
+    const { error: err } = editing
       ? await supabase.from("income_categories").update(payload).eq("id", editing)
       : await supabase.from("income_categories").insert(payload);
-    if (!error) { setDraft(null); setEditing(null); reload(); }
+    if (err) {
+      return setError(
+        /duplicate key|unique constraint/i.test(err.message)
+          ? `You already have an income category named "${payload.name}".`
+          : `Couldn't save: ${err.message}`
+      );
+    }
+    setError(null); setDraft(null); setEditing(null); reload();
   }
 
   const Form = (
@@ -335,17 +375,38 @@ function IncomeCategories({ owner, categories, reload }) {
   return (
     <div style={{ marginBottom: 22, background: "var(--ls-surface2)", border: "1px solid var(--ls-border)", borderRadius: 12, padding: 16 }}>
       <SectionLabel>Income categories</SectionLabel>
-      {categories.map((c) => {
+      {error && <Banner>{error}</Banner>}
+      {categories.filter((c) => !c.archived).map((c) => {
         const I = iconFor(c.icon_key);
         return editing === c.id ? <div key={c.id}>{Form}</div> : (
           <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid #1F2E4E" }}>
             <div style={{ width: 26, height: 26, borderRadius: 6, background: c.color + "33", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><I size={14} color={c.color} /></div>
             <div style={{ flex: 1, fontSize: 14 }}>{c.name}</div>
             <button onClick={() => { setDraft({ name: c.name, icon_key: c.icon_key, color: c.color }); setEditing(c.id); }} style={iconBtn}><Pencil size={13} /></button>
-            <button onClick={async () => { await supabase.from("income_categories").delete().eq("id", c.id); reload(); }} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={13} /></button>
+            <button onClick={() => remove(c)} style={{ ...iconBtn, color: "var(--ls-negative)" }}><Trash2 size={13} /></button>
           </div>
         );
       })}
+      {categories.some((c) => c.archived) && (
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--ls-border)" }}>
+          <div style={{ fontSize: 11, color: "var(--ls-textFaint)", marginBottom: 8 }}>
+            Archived - hidden when recording, kept so past months still add up
+          </div>
+          {categories.filter((c) => c.archived).map((c) => {
+            const I = iconFor(c.icon_key);
+            return (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", opacity: 0.6 }}>
+                <div style={{ width: 22, height: 22, borderRadius: 5, background: c.color + "33", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <I size={12} color={c.color} />
+                </div>
+                <div style={{ flex: 1, fontSize: 13 }}>{c.name}</div>
+                <button onClick={() => restore(c)} style={{ ...smallGhost, width: "auto", padding: "5px 12px", fontSize: 11 }}>Restore</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {draft && !editing ? Form : (!editing && (
         <button onClick={() => setDraft(blank)} style={{ ...smallGhost, marginTop: 10 }}>
           <Plus size={13} style={{ marginRight: 4, verticalAlign: -2 }} />Add a category
